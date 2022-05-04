@@ -91,6 +91,14 @@ namespace LIME
                     _set.Remove(item);
                     break;
                 }
+                // ] を排出しようとした時、既に,1が存在するかを確認する
+
+                if(firstItem.Value == "]")
+                {
+                    var temp = "";
+                }
+
+                // Debug.WriteLine($"[{firstItem.Begin}-{firstItem.End}] \"{firstItem.Value}\" {firstItem.UniqID} {firstItem.Generator.UniqID}");
                 yield return firstItem;
             }
         }
@@ -146,13 +154,18 @@ namespace LIME
                     return numBase++;
                 }
 
+                // "]" でパターン終了が確定するが、"]"自体が先走って行ってしまう。
+
                 // 辞書が未設定の時は設定する
                 if (_typePriorityDict == null)
                 {
                     _typePriorityDict = new Dictionary<Type, int>();
+
                     _typePriorityDict.Add(typeof(BorderMatch), AutoNumber());
                     _typePriorityDict.Add(typeof(LeftMatch), AutoNumber());
-                    _typePriorityDict.Add(typeof(DenyMatch), AutoNumber());
+                    //_typePriorityDict.Add(typeof(DenyMatch), AutoNumber());
+                    //_typePriorityDict.Add(typeof(LoopBodyMatch), AutoNumber());
+                    //_typePriorityDict.Add(typeof(LoopFinishedMatch), AutoNumber());
                     _typePriorityDict.Add(typeof(CharMatch), AutoNumber());
                     _typePriorityDict.Add(typeof(CharsMatch), AutoNumber());
                     _typePriorityDict.Add(typeof(EitherMatch), AutoNumber());

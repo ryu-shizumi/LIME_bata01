@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 using System.Diagnostics;
+using PipeIO;
 
 namespace LIME
 {
@@ -9,11 +10,21 @@ namespace LIME
     #region 文字型・文字列型の拡張関数
     public static class CharEx
     {
-        public static CodeRangeMatcher _(this char c)
+        /// <summary>
+        /// この文字を肯定文字マッチャーに変換する
+        /// </summary>
+        /// <param name="c">任意の文字</param>
+        /// <returns>肯定文字マッチャー</returns>
+        public static AffirmCharMatcher _(this char c)
         {
-            return new CodeRangeMatcher(c);
+            return new AffirmCharMatcher(c);
         }
 
+        /// <summary>
+        /// この文字列をマッチャーに変換する
+        /// </summary>
+        /// <param name="s">任意の文字列</param>
+        /// <returns>文字列に合致するPairマッチャー</returns>
         public static Matcher _(this string s)
         {
             if(s.Length == 0)
@@ -26,8 +37,8 @@ namespace LIME
 
             foreach(var code in stream)
             {
-                CodeRangeMatcher c;
-                c = new CodeRangeMatcher(code);
+                AffirmCharMatcher c;
+                c = new AffirmCharMatcher(code);
                 if (result == null)
                 {
                     result = c;
@@ -40,18 +51,30 @@ namespace LIME
             return result;
         }
 
-        public static DenyRangeMatcher Deny(this char c)
+        /// <summary>
+        /// この文字を否定文字マッチャーに変換する
+        /// </summary>
+        /// <param name="c">任意の文字</param>
+        /// <returns>否定文字マッチャー</returns>
+        public static DenyCharMatcher Deny(this char c)
         {
             return c._().Deny();
         }
-        public static CodeRangeMatcher To(this char min, char max)
+
+        /// <summary>
+        /// 文字コード範囲を指定して肯定文字マッチャーを生成する
+        /// </summary>
+        /// <param name="min"></param>
+        /// <param name="max"></param>
+        /// <returns></returns>
+        public static AffirmCharMatcher To(this char min, char max)
         {
-            return new CodeRangeMatcher(min, max);
+            return new AffirmCharMatcher(min, max);
         }
 
-        public static CharRepetMatcher Repet(this char c)
+        public static LoopContainMatcher Loop(this char c)
         {
-            return c._().IsolatedLoop();
+            return c._().Loop();
         }
 
         public static Match FindBest(this string text, Matcher matcher)
@@ -61,9 +84,71 @@ namespace LIME
     }
     #endregion
 
+    #region ヘルパー関数群
+    public abstract class MatcherHelper
+    {
+        /// <summary>
+        /// 左結合の二項演算(四則演算やシフト演算など)に一致するマッチャーを生成して返す
+        /// </summary>
+        /// <param name="operators">演算子</param>
+        /// <param name="operand">(入力)オペランド (出力)これより優先度の低い二項演算のオペランド</param>
+        /// <returns>二項演算に一致するマッチャー</returns>
+        public static RecursionMatcher LeftOperation(Matcher operators, ref Matcher operand)
+        {
+            //
+            // 左結合二項演算の定義法
+            //
+            // expAAA.Inner = (リテラル | expAAA) + 演算子 + (リテラル)
+            // expBBB.Inner = (リテラル | expAAA | expBBB) + 演算子 + (リテラル | expAAA)
+            // expCCC.Inner = (リテラル | expAAA | expBBB | expCCC) + 演算子 + (リテラル | expAAA | expBBB)
+            // expDDD.Inner = (リテラル | expAAA | expBBB | expCCC | expDDD) + 演算子 + (リテラル | expAAA | expBBB | expCCC)
+            // 
+            // 一般化すると…
+            // expNNN.Inner = (自分より優先度の高い式の左辺 | expNNN) + 演算子 + (自分より優先度の高い式の右辺)
+            //
+
+            var exp = new RecursionMatcher();
+            var newOperand = (exp | operand);
+            exp.Inner = newOperand + operators + operand;
+            operand = newOperand;
+            return exp;
+        }
+
+        /// <summary>
+        /// 右結合の二項演算(C言語の代入演算など)に一致するマッチャーを生成して返す
+        /// </summary>
+        /// <param name="operators">演算子</param>
+        /// <param name="operand">(入力)オペランド (出力)これより優先度の低い二項演算のオペランド</param>
+        /// <returns>二項演算に一致するマッチャー</returns>
+        public static RecursionMatcher RightOperation(Matcher operators, ref Matcher operand)
+        {
+            //
+            // 右結合二項演算の定義法
+            //
+            // expAAA.Inner = (リテラル) + 演算子 + (リテラル | expAAA)
+            // expBBB.Inner = (リテラル | expAAA) + 演算子 + (リテラル | expAAA | expBBB)
+            // expCCC.Inner = (リテラル | expAAA | expBBB) + 演算子 + (リテラル | expAAA | expBBB | expCCC)
+            // expDDD.Inner = (リテラル | expAAA | expBBB | expCCC) + 演算子 + (リテラル | expAAA | expBBB | expCCC | expDDD)
+            // 
+            // 一般化すると…
+            // expNNN.Inner = (自分より優先度の高い式の左辺 | expNNN) + 演算子 + (自分より優先度の高い式の右辺)
+            //
+
+            var exp = new RecursionMatcher();
+            var newOperand = (exp | operand);
+            exp.Inner = operand + operators + newOperand;
+            operand = newOperand;
+            return exp;
+        }
+    }
+    #endregion
+
     #region マッチャーの基本クラス
     public abstract class Matcher
     {
+        public static bool IsOutputTree = false;
+
+
         public static int _uniqCount = 0;
         /// <summary>
         /// ユニークＩＤ(接頭辞の G は Graph の先頭文字)
@@ -93,12 +178,15 @@ namespace LIME
             Matcher.Init(text);
             Match.Init();
 
-            Debug_OutputTree();
+            if(IsOutputTree)
+            {
+                Debug_OutputTree();
+            }
 
             IEnumerable<Match> results = null;
             using (var root = new RootMatcher(this))
             {
-                Executor.Execute(text);
+                Executor.Execute(text, root);
                 results = Match.Map[root];
             }
 
@@ -120,26 +208,27 @@ namespace LIME
         /// <returns></returns>
         public Match FindFirst(string text)
         {
-            var matches = Find(text);
-            int minBegin = int.MaxValue;
-            int maxLength = -999;
+            var matches = new List<Match>(Find(text));
             Match result = null;
+
+            // より早く、より長いマッチを返信する
+
             foreach(var match in matches)
             {
-                if( match.Begin< minBegin)
+                if(result == null)
                 {
                     result = match;
-                    maxLength = match.Length;
-                    minBegin = match.Begin;
                     continue;
                 }
-                else if(match.Begin == minBegin)
+
+                if(result.Begin < match.Begin)
                 {
-                    if (maxLength < match.Length)
-                    {
-                        result = match;
-                        maxLength = match.Length;
-                    }
+                    continue;
+                }
+
+                if(result.End < match.End)
+                {
+                    result = match;
                 }
             }
 
@@ -208,14 +297,26 @@ namespace LIME
         //    }
         //}
 
-        public void Debug_OutputTree()
+        /// <summary>
+        /// マッチャーのツリー構造を出力する
+        /// </summary>
+        /// <returns></returns>
+        public string Debug_OutputTree()
         {
             var set = new HashSet<RecursionMatcher>();
+            var buffer = new TextBuffer();
+            Debug_OutputTree_Body(buffer, "", set);
 
-            Debug_OutputTree_Body("", set);
-
+            return buffer.ToString();
         }
-        private void Debug_OutputTree_Body(string indent, HashSet<RecursionMatcher> set)
+
+        /// <summary>
+        /// マッチャーのツリー構造を出力する本体部分
+        /// </summary>
+        /// <param name="buffer"></param>
+        /// <param name="indent"></param>
+        /// <param name="set"></param>
+        private void Debug_OutputTree_Body(TextBuffer buffer, string indent, HashSet<RecursionMatcher> set)
         {
             if(this is RecursionMatcher recursion)
             {
@@ -226,15 +327,112 @@ namespace LIME
                 set.Add(recursion);
             }
 
-            Debug.WriteLine($"{indent}{UniqID} {TypeName} {ToString()}");
+            buffer.WriteLine($"{indent}{UniqID} {TypeName} {ToString()}");
 
             if (this is OwnerMatcher owner)
             {
                 foreach (var child in owner.EnumChildren())
                 {
-                    child.Debug_OutputTree_Body(indent + "  ", set);
+                    child.Debug_OutputTree_Body(buffer, indent + "  ", set);
                 }
             }
+        }
+
+        /// <summary>
+        /// マッチャーのツリー構造を出力する
+        /// </summary>
+        /// <returns></returns>
+        public void Debug_OutputTreeDetail(TextViewClient client)
+        {
+            var set = new HashSet<RecursionMatcher>();
+            var buffer = new TextBuffer();
+            //client.SuspendLayout();
+            Debug_OutputTreeDetail_Body(client, "", set, new HashSet<RecursionMatcher>());
+            //client.ResumeLayout();
+        }
+        /// <summary>
+        /// マッチャーのツリー構造を出力する本体部分
+        /// </summary>
+        /// <param name="buffer"></param>
+        /// <param name="indent"></param>
+        /// <param name="set"></param>
+        private void Debug_OutputTreeDetail_Body(
+            TextViewClient client, string indent, HashSet<RecursionMatcher> set, HashSet<RecursionMatcher> hash)
+        {
+            if(this is RecursionMatcher rec)
+            {
+                if(hash.Contains(rec))
+                {
+                    return;
+                }
+                hash.Add(rec);
+            }
+
+
+            if (this is RecursionMatcher recursion)
+            {
+                if (set.Contains(recursion))
+                {
+                    return;
+                }
+                set.Add(recursion);
+            }
+
+            client.Write($"{indent}{UniqID} {TypeName} {ToString()}","");
+
+            HashSet<Match> matches = Match.Map[this];
+
+            int matchCount = 0;
+            // このマッチャー上の全てのマッチに関して処理する
+            foreach(var match in matches)
+            {
+                matchCount++;
+
+                if(matchCount > 1)
+                {
+                    client.Write(",");
+                }
+
+                client.Write(
+                    $"{match.UniqID}",
+                    BuildMatchTree(match),
+                    //$"{match.TypeName} [{match.Begin}-{match.End}] {match.Value}",
+                    Colors.Red, Colors.LightGray);
+            }
+
+            client.WriteLine("");
+
+
+            if (this is OwnerMatcher owner)
+            {
+                var children = new List<Matcher>(owner.EnumChildren());
+                // 子マッチャー全てに処理する
+                foreach (var child in children)
+                {
+                    child.Debug_OutputTreeDetail_Body(client, indent + "  ", set, hash);
+                }
+            }
+        }
+
+        private string BuildMatchTree(Match match)
+        {
+            StringBuilder sb = new StringBuilder();
+
+            BuildBody(match,"");
+
+            void BuildBody(Match m, string indent)
+            {
+                sb.AppendLine($"{indent}{m.UniqID} {m.TypeName} [{m.Begin}-{m.End}] {m.Value}");
+                if(m is OwnerMatch owner)
+                {
+                    foreach(var inner in owner.Inners())
+                    {
+                        BuildBody(inner,indent + "  ");
+                    }
+                }
+            }
+
+            return sb.ToString();
         }
 
         public HashSet<OwnerMatcher> GetParents()
@@ -396,6 +594,12 @@ namespace LIME
 
         public string Tag { get; protected set; }
 
+        /// <summary>
+        /// BorderMatcher配下、もしくはBorderMatcher自体であるかを示すフラグ
+        /// </summary>
+        public bool BordersFollower = false;
+
+
         public LoopBodyMatcher Loop()
         {
             return new LoopBodyMatcher(this);
@@ -430,7 +634,7 @@ namespace LIME
         /// <returns></returns>
         public static LoopContainMatcher Identifier(char optionChar,　params char[] otherOptions)
         {
-            CodeRangeMatcher optionals = optionChar._();
+            AffirmCharMatcher optionals = optionChar._();
             if(otherOptions.Length > 0)
             {
                 foreach(char c in otherOptions)
@@ -469,64 +673,54 @@ namespace LIME
         public static LoopContainMatcher Identifier()
         {
             var alphabet = 'A'.To('Z') | 'a'.To('z');
+            var underBar = '_'._();
             var number = '0'.To('9');
 
-            var headChar = '_' | alphabet;
-            var beginBorder = new BorderMatcher(headChar.Deny(), headChar);
-            var head = beginBorder + headChar;
+            var leadChar = alphabet | underBar;
+            var loopChar = leadChar| number;
 
-            var bodyChar = '_' | alphabet | number;
-            var endBorder = new BorderMatcher(bodyChar, bodyChar.Deny());
-
-            return new LoopContainMatcher(head, bodyChar, endBorder);
+            return LedLoop(leadChar, loopChar);
         }
 
+        
+
         /// <summary>
-        /// １文字目に使えない文字が設定されている「文字のループ」
+        /// 一文字目だけ制約のあるループ
         /// </summary>
-        /// <param name="forbidChar">１文字目に使えない文字</param>
-        /// <param name="loopChar">ループのどこでも使える文字</param>
-        /// <returns></returns>
-        public static LoopContainMatcher ForbidLoop(char forbidChar, CodeRangeMatcher loopChar)
-        {
-            return ForbidLoop(forbidChar._(), loopChar);
-        }
-        /// <summary>
-        /// １文字目に使えない文字が設定されている「文字のループ」
-        /// </summary>
-        /// <param name="forbidChar">１文字目に使えない文字</param>
-        /// <param name="loopChar">ループのどこでも使える文字</param>
+        /// <param name="leadChar">一文字目</param>
+        /// <param name="loopChar">二文字目以降</param>
         /// <returns></returns>
         /// <remarks>
         /// 
         /// 一般的な言語の識別子
-        ///     ForbidLoop(
-        ///         '0'.To('9'), // 先頭は数字だけ禁止
-        ///         'A'.To('Z') | 'a'.To('z') | '_' // アルファベットとアンダースコアが使える
+        ///     LedLoop(
+        ///         // 先頭はアルファベット・アンダースコア
+        ///         'A'.To('Z') | 'a'.To('z') | '_' 
+        ///         
+        ///         // 二文字目以降はアルファベット・アンダースコア・数字
+        ///         'A'.To('Z') | 'a'.To('z') | '_' | '0'.To('9') 
         ///         )
         /// 
         /// 先頭にゼロを許さない整数リテラル
-        ///     ForbidLoop(
-        ///         '0', // 先頭はゼロだけ禁止
-        ///         '1'.To('9') | 'a'.To('z') // 1から9が使える
+        ///     LedLoop(
+        ///         '1'.To('9')  // 先頭は 1から9
+        ///         '0'.To('9')  // 二文字目以降は 0から9
         ///         )
         ///     
         /// 
         /// </remarks>
-        public static LoopContainMatcher ForbidLoop(CodeRangeMatcher forbidChar, CodeRangeMatcher loopChar)
+        public static LoopContainMatcher LedLoop(AffirmCharMatcher leadChar, AffirmCharMatcher loopChar)
         {
-            var beginBorder = new BorderMatcher(loopChar.Deny() | Begin, loopChar);
-            var head = beginBorder + loopChar;
+            var prevBorder = new BorderMatcher(leadChar.Deny(), leadChar);
+            var headPart = prevBorder + leadChar;
+            var endBorder = new BorderMatcher(loopChar, loopChar.Deny());
 
-            var bodyChar = loopChar | forbidChar;
-            var endBorder = new BorderMatcher(bodyChar, bodyChar.Deny() | End);
-
-            return new LoopContainMatcher(head, bodyChar, endBorder);
+            return new LoopContainMatcher(headPart, loopChar, endBorder);
         }
 
         public static LoopContainMatcher StringLiteral(Matcher begin, Matcher c, Matcher end)
         {
-            var anyChar = new CodeRangeMatcher(0, CodeRangeMatcher.CharCodeMax);
+            var anyChar = new AffirmCharMatcher(0, AffirmCharMatcher.CharCodeMax);
 
             var stringprefix = "r"._() | "u" | "R" | "U" | "f" | "F"
                                  | "fr" | "Fr" | "fR" | "FR" | "rf" | "rF" | "Rf" | "RF";
@@ -541,6 +735,11 @@ namespace LIME
         }
 
         public abstract Matcher Clone();
+
+        public override string ToString()
+        {
+            return "";
+        }
     }
     #endregion
 
@@ -772,36 +971,70 @@ namespace LIME
     }
     #endregion
 
+    #region CodeRanges
+    //public struct CodeRanges
+    //{
+    //    private CodeRange[] _inners;
+    //    public bool IsDeny { get; }
 
-    
+    //    public CodeRanges(int min, int max)
+    //    {
+    //        IsDeny = false;
+    //        _inners = new CodeRange[1];
+    //        _inners[0] = new CodeRange(min, max);
+    //    }
 
-    #region 文字コード範囲マッチャー
+    //    public CodeRanges(CodeRange range)
+    //    {
+    //        if (range == null)
+    //        {
+
+    //        }
+    //    }
+    //    public CodeRanges(CodeRanges sorce, bool isDeny)
+    //    {
+    //        var srcInner = sorce._inners;
+    //        _inners = new CodeRange[srcInner.Length];
+    //        srcInner.CopyTo(_inners,0);
+    //        IsDeny = isDeny;
+    //    }
+
+    //    public CodeRanges Deny()
+    //    {
+    //        return new CodeRanges(this, !IsDeny);
+    //    }
+    //}
+
+    #endregion
+
+
+    #region 文字コード範囲マッチャーの基底クラス
     /// <summary>
-    /// 文字コード範囲に合致するマッチャー
+    /// 文字コード範囲マッチャーの基底クラス
     /// </summary>
-    public class CodeRangeMatcher : Matcher
+    public abstract class CharMatcher : Matcher
     {
-        public static List<CodeRangeMatcher> InstanceList = new List<CodeRangeMatcher>();
+        public static List<CharMatcher> InstanceList = new List<CharMatcher>();
         public const int CharCodeMin = 0x00000000;
-        public const int CharCodeMax = 0x7FFFFFFF;
+        public const int CharCodeMax = 0x10FFFF;
 
-        private IEnumerable<CodeRange> _ranges;
+        public IEnumerable<CodeRange> _ranges;
 
-
-        public CodeRangeMatcher(int code)
+        #region コンストラクタ
+        public CharMatcher(int code)
         {
-            if(code < CharCodeMin)
+            if (code < CharCodeMin)
             {
                 code = CharCodeMin;
             }
-            if(CharCodeMax < code)
+            if (CharCodeMax < code)
             {
                 code = CharCodeMax;
             }
             _ranges = new CodeRange[] { new CodeRange(code, code) };
             InstanceList.Add(this);
         }
-        public CodeRangeMatcher(int min, int max)
+        public CharMatcher(int min, int max)
         {
             if (min < CharCodeMin)
             {
@@ -814,86 +1047,48 @@ namespace LIME
             _ranges = new CodeRange[] { new CodeRange(min, max) };
             InstanceList.Add(this);
         }
-        public CodeRangeMatcher(IEnumerable<CodeRange> ranges1, IEnumerable<CodeRange> ranges2)
+        public CharMatcher(IEnumerable<CodeRange> ranges1, IEnumerable<CodeRange> ranges2)
         {
             _ranges = new List<CodeRange>(CodeRange.Marge(ranges1, ranges2));
             InstanceList.Add(this);
         }
-        public CodeRangeMatcher(IEnumerable<CodeRange> ranges)
+        public CharMatcher(IEnumerable<CodeRange> ranges)
         {
             _ranges = new List<CodeRange>(ranges);
             InstanceList.Add(this);
         }
+        #endregion
 
-
-        public void IsMatch(CharAtom atom)
+        protected bool RangesCheck_base(CharAtom atom)
         {
-            foreach(var range in _ranges)
+            foreach (var range in _ranges)
             {
                 if ((range.Min <= atom.Code) && (atom.Code <= range.Max))
                 {
-                    var newMatch = new CharMatch(atom, this);
-                    break;
+                    return true;
                 }
             }
+            return false;
         }
 
-        #region 演算子(論理和)
-        public static CodeRangeMatcher operator |(CodeRangeMatcher a, CodeRangeMatcher b)
+        public bool RangesCheck(CharAtom atom)
         {
-            return new CodeRangeMatcher(a._ranges, b._ranges);
-        }
-        public static CodeRangeMatcher operator |(CodeRangeMatcher range, char c)
-        {
-            return range | new CodeRangeMatcher((int)c);
-        }
-        public static CodeRangeMatcher operator |(char c, CodeRangeMatcher range)
-        {
-            return new CodeRangeMatcher((int)c) | range;
-        }
-        #endregion
-
-        #region インデクサ(タグ付け)
-        public CodeRangeMatcher this[string tag]
-        {
-            get
+            var result = RangesCheck_base(atom);
+            if(IsDeny)
             {
-                var result = new CodeRangeMatcher(_ranges);
-                result.Tag = tag;
-                return result;
+                result = !result;
             }
-        }
-        #endregion
-
-        #region Clone()
-        public override Matcher Clone()
-        {
-            var result = new CodeRangeMatcher(_ranges);
-            result.Tag = Tag;
             return result;
         }
-        #endregion
 
-        /// <summary>
-        /// この文字の否定を表現するマッチャーを取得する
-        /// </summary>
-        /// <returns></returns>
-        public DenyRangeMatcher Deny()
-        {
-            return new DenyRangeMatcher(_ranges);
-        }
+        public abstract bool IsDeny { get; }
 
-        /// <summary>
-        /// この文字の１回以上の繰り返しを表現するマッチャーを取得する
-        /// </summary>
-        /// <returns></returns>
-        /// <remarks>
-        /// １文字目に使えない文字が設定されたループの場合は対処できないので、
-        /// Matcher.ForbidLoop() を使う。
-        /// </remarks>
-        public CharRepetMatcher IsolatedLoop()
+        public void IsMatch(CharAtom atom)
         {
-            return new CharRepetMatcher(this);
+            if (RangesCheck(atom))
+            {
+                var newMatch = new CharMatch(atom, this);
+            }
         }
 
         public override string ToString()
@@ -910,78 +1105,155 @@ namespace LIME
     }
     #endregion
 
-    #region 文字コード範囲否定マッチャー
+    #region 文字コード範囲マッチャー
     /// <summary>
-    /// 文字コード範囲否定マッチャー
+    /// 肯定文字マッチャー。char型から暗黙の型変換で生成可能。
     /// </summary>
-    public class DenyRangeMatcher : Matcher
+    public class AffirmCharMatcher : CharMatcher
     {
-        public static List<DenyRangeMatcher> InstanceList = new List<DenyRangeMatcher>();
+        public AffirmCharMatcher(int code) : base(code) { }
 
-        private IEnumerable<CodeRange> _ranges;
+        public AffirmCharMatcher(int min, int max) : base(min,max)
+        {
+        }
+        public AffirmCharMatcher(IEnumerable<CodeRange> ranges1, IEnumerable<CodeRange> ranges2)
+            :base(ranges1, ranges2) { }
+        public AffirmCharMatcher(IEnumerable<CodeRange> ranges) : base(ranges) { }
 
+        public override bool IsDeny { get { return false; } }
 
-        public DenyRangeMatcher(int code)
+        #region 暗黙の型変換
+        public static implicit operator AffirmCharMatcher(char c)
         {
-            _ranges = new CodeRange[] { new CodeRange(code, code) };
-            InstanceList.Add(this);
+            return c._();
         }
-        public DenyRangeMatcher(int min, int max)
-        {
-            _ranges = new CodeRange[] { new CodeRange(min, max) };
-            InstanceList.Add(this);
-        }
-        public DenyRangeMatcher(IEnumerable<CodeRange> ranges1, IEnumerable<CodeRange> ranges2)
-        {
-            _ranges = new List<CodeRange>(CodeRange.Marge(ranges1, ranges2));
-            InstanceList.Add(this);
-        }
-        public DenyRangeMatcher(IEnumerable<CodeRange> ranges)
-        {
-            _ranges = new List<CodeRange>(ranges);
-            InstanceList.Add(this);
-        }
-
-        public void IsMatch(CharAtom atom)
-        {
-            bool onRange = false;
-
-            foreach (var range in _ranges)
-            {
-                if((range.Min <= atom.Code) && (atom.Code <= range.Max))
-                {
-                    onRange = true;
-                    break;
-                }
-            }
-            if (onRange == false)
-            {
-                var newMatch = new CharMatch(atom, this);
-            }
-        }
+        #endregion
 
         #region 演算子(論理和)
-        public static DenyRangeMatcher operator |(DenyRangeMatcher a, DenyRangeMatcher b)
+        public static AffirmCharMatcher operator |(AffirmCharMatcher a, AffirmCharMatcher b)
         {
-            return new DenyRangeMatcher(a._ranges, b._ranges);
+            return new AffirmCharMatcher(a._ranges, b._ranges);
+        }
+        public static AffirmCharMatcher operator |(AffirmCharMatcher range, char c)
+        {
+            return range | new AffirmCharMatcher((int)c);
+        }
+        public static AffirmCharMatcher operator |(char c, AffirmCharMatcher range)
+        {
+            return new AffirmCharMatcher((int)c) | range;
         }
         #endregion
 
         #region インデクサ(タグ付け)
-        public DenyRangeMatcher this[string tag]
+        public AffirmCharMatcher this[string tag]
         {
             get
             {
-                var result = new DenyRangeMatcher(_ranges);
+                var result = new AffirmCharMatcher(_ranges);
                 result.Tag = tag;
                 return result;
             }
         }
         #endregion
+
         #region Clone()
         public override Matcher Clone()
         {
-            var result = new DenyRangeMatcher(_ranges);
+            var result = new AffirmCharMatcher(_ranges);
+            result.Tag = Tag;
+            return result;
+        }
+        #endregion
+
+        /// <summary>
+        /// この文字の否定を表現するマッチャーを取得する
+        /// </summary>
+        /// <returns></returns>
+        public DenyCharMatcher Deny()
+        {
+            return new DenyCharMatcher(_ranges);
+        }
+
+        /// <summary>
+        /// この文字の１回以上の繰り返しを表現するマッチャーを取得する
+        /// </summary>
+        /// <returns></returns>
+        /// <remarks>
+        /// １文字目に使えない文字が設定されたループの場合は対処できないので、
+        /// Matcher.LedLoop() を使う。
+        /// </remarks>
+        public LoopContainMatcher Loop()
+        {
+            var deny = Deny();
+
+            var prevBorder = new BorderMatcher(deny, this);
+            var endBorder = new BorderMatcher(this, deny);
+
+            return new LoopContainMatcher(prevBorder, this, endBorder);
+        }
+
+        public override string ToString()
+        {
+            var rangeList = new List<CodeRange>(_ranges);
+            
+            if((rangeList.Count == 1) && (rangeList[0].Min == rangeList[0].Max))
+            {
+                return rangeList[0].ToString();
+            }
+
+            var sb = new StringBuilder();
+            sb.Append("[");
+            foreach (var range in rangeList)
+            {
+                sb.Append(range);
+            }
+            sb.Append("]");
+            return sb.ToString();
+        }
+
+    }
+    #endregion
+
+
+    #region 文字コード範囲否定マッチャー
+    /// <summary>
+    /// 文字マッチャー(否定)
+    /// </summary>
+    public class DenyCharMatcher : CharMatcher
+    {
+        public DenyCharMatcher(int code) : base(code) { }
+        public DenyCharMatcher(int min, int max) : base(min, max) { }
+        public DenyCharMatcher(IEnumerable<CodeRange> ranges1, IEnumerable<CodeRange> ranges2)
+            : base(ranges1, ranges2) { }
+        public DenyCharMatcher(IEnumerable<CodeRange> ranges) : base(ranges) { }
+
+        public override bool IsDeny { get { return true; } }
+
+
+
+        #region 演算子(論理和)
+        public static DenyCharMatcher operator |(DenyCharMatcher a, DenyCharMatcher b)
+        {
+            return new DenyCharMatcher(a._ranges, b._ranges);
+        }
+        #endregion
+
+        #region インデクサ(タグ付け)
+        public DenyCharMatcher this[string tag]
+        {
+            get
+            {
+                var result = new DenyCharMatcher(_ranges);
+                result.Tag = tag;
+                return result;
+            }
+        }
+        #endregion
+
+        #region Clone()
+        public override Matcher Clone()
+        {
+            var result = new DenyCharMatcher(_ranges);
             result.Tag = Tag;
             return result;
         }
@@ -991,9 +1263,9 @@ namespace LIME
         /// この否定文字の否定を表現するマッチャーを取得する
         /// </summary>
         /// <returns></returns>
-        public CodeRangeMatcher Deny()
+        public AffirmCharMatcher Deny()
         {
-            return new CodeRangeMatcher(_ranges);
+            return new AffirmCharMatcher(_ranges);
         }
 
         /// <summary>
@@ -1022,12 +1294,22 @@ namespace LIME
     }
     #endregion
 
-    
+    #region 子持ちマッチャーインターフェイス
+    public interface IHasChildrenMatcher
+    {
+        /// <summary>
+        /// 子要素を列挙する
+        /// </summary>
+        /// <returns>子要素の列挙子</returns>
+        public IEnumerable<Matcher> EnumChildren();
+    }
+    #endregion
+
     #region 子持ちマッチャーの基底クラス
     /// <summary>
     /// 子持ちマッチャーの基底クラス
     /// </summary>
-    public abstract class OwnerMatcher : Matcher
+    public abstract class OwnerMatcher : Matcher, IHasChildrenMatcher
     {
         /// <summary>
         /// 子要素を列挙する
@@ -1052,43 +1334,84 @@ namespace LIME
     /// <summary>
     /// 文字パターンの始まり又は終わりの境界を検出するマッチャー
     /// </summary>
-    public class BorderMatcher : OwnerMatcher
+    public class BorderMatcher : Matcher, IHasChildrenMatcher
     {
+        public static List<BorderMatcher> InstanceList = new List<BorderMatcher>();
         private Matcher _prev;
-        private Matcher _current;
+        private Matcher _next;
 
-        private bool prevMatch;
-        private int prevEnd;
+        //private bool prevMatch;
+        //private int prevEnd;
 
-        public BorderMatcher(Matcher prev, Matcher current)
+        public BorderMatcher(Matcher prev, Matcher next)
         {
+            //BordersFollower = true;
+
             _prev = prev;
-            AddOwner(_prev, this);
-            _current = current;
-            AddOwner(_current, this);
+            //AddOwner(_prev, this);
+            _next = next;
+            //AddOwner(_next, this);
+
+            //// 配下全てに「Border配下」とマーキングする
+            //MarkBordersFollower();
+
+            InstanceList.Add(this);
         }
 
 
-        public override IEnumerable<Matcher> EnumChildren()
+        public IEnumerable<Matcher> EnumChildren()
         {
             yield return _prev;
-            yield return _current;
+            yield return _next;
         }
-        public override void IsMatch(Matcher generator, Match match)
+
+        public void IsMatch(BorderAtom atom)
         {
-            if(generator == _prev)
+            bool prevOk = false;
+            if(atom.Begin == 2)
             {
-                prevMatch = true;
-                prevEnd = match.End;
+                var temp = "";
             }
-            else
+
+
+            //if ((atom.Prev is BeginAtom) && (_prev == Begin))
+            if ((atom.Begin == 0)) 
             {
-                if(prevMatch && (prevEnd == match.Begin))
+                prevOk = true;
+            }
+            else if(atom.Prev is CharAtom prevChar)
+            {
+                if(_prev is CharMatcher rangeBase)
                 {
-                    var newMatch = new BorderMatch(match.Begin, this);
+                    prevOk = rangeBase.RangesCheck(prevChar);
                 }
-                prevMatch = false;
             }
+
+            if(prevOk == false)
+            {
+                return;
+            }
+
+            bool nextOK = false;
+
+            if((atom.Next is EndAtom))
+            {
+                nextOK = true;
+            }
+            else if(atom.Next is CharAtom nextChar)
+            {
+                if (_next is CharMatcher rangeBase)
+                {
+                    nextOK = rangeBase.RangesCheck(nextChar);
+                }
+            }
+
+            if(nextOK == false)
+            {
+                return;
+            }
+
+            var newMatch = new BorderMatch(atom.Begin, this);
         }
 
         #region インデクサ(タグ付け)
@@ -1096,20 +1419,55 @@ namespace LIME
         {
             get
             {
-                var result = new BorderMatcher(_prev, _current);
+                var result = new BorderMatcher(_prev, _next);
                 result.Tag = tag;
                 return result;
             }
         }
         #endregion
+
         #region Clone()
         public override Matcher Clone()
         {
-            var result = new BorderMatcher(_prev, _current);
+            var result = new BorderMatcher(_prev, _next);
             result.Tag = Tag;
             return result;
         }
         #endregion
+
+        #region Border配下のマッチを優先的に動かす処理
+        ///// <summary>
+        ///// Borderマッチャーから再帰的に配下に「Border配下」という印を付ける。
+        ///// </summary>
+        //public void MarkBordersFollower()
+        //{
+        //    var hash = new HashSet<Matcher>();
+        //    MarkBordersFollower_body(this, hash);
+        //}
+
+        //private void MarkBordersFollower_body(Matcher target, HashSet<Matcher> hash)
+        //{
+        //    target.BordersFollower = true;
+
+        //    if (target is OwnerMatcher owner)
+        //    {
+        //        foreach(var child in owner.EnumChildren())
+        //        {
+        //            if(hash.Contains(child))
+        //            {
+        //                continue;
+        //            }
+        //            hash.Add(child);
+        //            MarkBordersFollower_body(child, hash);
+        //        }
+        //    }
+        //}
+        #endregion
+
+        public override string ToString()
+        {
+            return $"({_prev}:{_next})";
+        }
     }
     #endregion
 
@@ -1126,22 +1484,22 @@ namespace LIME
 
         public string Value = "";
 
-        public CharRepetMatcher(CodeRangeMatcher c)
+        public CharRepetMatcher(AffirmCharMatcher c)
         {
             Value = $"{c}+";
 
-            _prev = new BorderMatcher(c.Deny() | Begin, c);
+            _prev = new BorderMatcher(c.Deny(), c);
             AddOwner(_prev, this);
-            _next = new BorderMatcher(c, c.Deny() | End);
+            _next = new BorderMatcher(c, c.Deny());
             AddOwner(_next, this);
         }
-        public CharRepetMatcher(DenyRangeMatcher c)
+        public CharRepetMatcher(DenyCharMatcher c)
         {
             Value = $"{c}+";
 
-            _prev = new BorderMatcher(c.Deny() | Begin, c);
+            _prev = new BorderMatcher(c.Deny(), c);
             AddOwner(_prev, this);
-            _next = new BorderMatcher(c, c.Deny() | End);
+            _next = new BorderMatcher(c, c.Deny());
             AddOwner(_next, this);
         }
         private CharRepetMatcher(BorderMatcher prev, BorderMatcher next)
@@ -1169,6 +1527,7 @@ namespace LIME
             }
         }
         #endregion
+
         #region Clone()
         public override Matcher Clone()
         {
@@ -1279,10 +1638,16 @@ namespace LIME
 
         public override void IsMatch(Matcher generator, Match match)
         {
+
             if (generator == _left)
             {
                 var newMatch = new LeftMatch(match, this);
                 // Leftマッチは動かさないのでNewItemには登録しない
+
+                //Debug.WriteLine($"G12上のLeftマッチのUniqID = {newMatch.UniqID}");
+
+                var list = Match.Map[this];
+                var count = list.Count;
             }
             else if (generator == _right)
             {
@@ -1430,14 +1795,10 @@ namespace LIME
 
         public LoopBodyMatcher(Matcher body)
         {
-            if(UniqID == "G219")
-            {
-                var temp = "";
-            }
-
             Body = body;
             AddOwner(Body, this);
         }
+
         #region インデクサ(タグ付け)
         public LoopBodyMatcher this[string tag]
         {
@@ -1483,6 +1844,11 @@ namespace LIME
             return new HeadedLoopMatcher(head._(), body);
         }
         #endregion
+
+        public override string ToString()
+        {
+            return Body.ToString();
+        }
     }
 
     public class HeadedLoopMatcher : OwnerMatcher
@@ -1534,6 +1900,10 @@ namespace LIME
     /// <summary>
     /// ループする胴体部分を包含するマッチャー
     /// </summary>
+    /// <remarks>
+    /// 先頭部・胴体部・末尾部の３つから構成され、先頭と末尾の両方が揃うまでマッチを発生させる事は無い。
+    /// 先頭と末尾の両方が揃えば、胴体部の一致数がゼロ個でもマッチは発生する。
+    /// </remarks>
     public class LoopContainMatcher : OwnerMatcher
     {
         private Matcher _head;
@@ -1633,6 +2003,7 @@ namespace LIME
             {
                 foreach (var wait in Match.Map[this].RemoveEnum())
                 {
+                    if (wait is LoopBodysMatch) { continue; }
                     // 結合を検査(空白を挟んだ結合も調べる)して繋がる時
                     if (Executor.CheckConnection(wait, wait.End, match.Begin))
                     {
@@ -1645,6 +2016,7 @@ namespace LIME
             {
                 foreach (var wait in Match.Map[this].RemoveEnum())
                 {
+                    if(wait is LoopBodysMatch) { continue; }
                     // 結合を検査(空白を挟んだ結合も調べる)して繋がる時
                     if (Executor.CheckConnection(wait, wait.End, match.Begin))
                     {
@@ -1652,6 +2024,11 @@ namespace LIME
                     }
                 }
             }
+        }
+
+        public override string ToString()
+        {
+            return $"({_head}{_body}{_tail})";
         }
 
         #region ラップマッチャー
@@ -1801,7 +2178,10 @@ namespace LIME
             var newMatch = new RootMatch(match, this);
         }
 
-        
+        public override string ToString()
+        {
+            return TypeName;
+        }
     }
     #endregion
 

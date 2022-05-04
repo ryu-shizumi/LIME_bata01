@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Linq;
 
 using System.Text.RegularExpressions;
+using PipeIO;
 
 namespace LIME
 {
@@ -22,21 +23,23 @@ namespace LIME
         /// 文字列を受け取り、文字トークンを放出する。
         /// </summary>
         /// <param name="text"></param>
-        public static void Execute(string text)
+        public static void Execute(string text, Matcher root)
         {
+            TextViewClient client = new TextViewClient();
+            
             CallCount++;
 
-            var chars = CodeRangeMatcher.InstanceList;
-            var denys = DenyRangeMatcher.InstanceList;
+            // 肯定文字・否定文字から親のある者のみ抽出
+            var chars = CharMatcher.InstanceList.Where(m => m.HasParent);
+            // 境界マッチャーから親のある者のみ抽出
+            var borders = BorderMatcher.InstanceList.Where(m => m.HasParent);
 
             // 文字列を要素列に分解する
-            IEnumerable<TextAtom> atoms = new List<TextAtom>(Atomize(text));
+            IEnumerable <TextAtom> atoms = new List<TextAtom>(Atomize(text));
 
             var atomIndex = -1;
             foreach (var atom in atoms)
             {
-                // Debug.WriteLine($"{atom.TypeName}[{atom.Begin}-{atom.End}]");
-
                 atomIndex++;
                 var atomBegin = atom.Begin;
 
@@ -45,23 +48,16 @@ namespace LIME
                     // 長さゼロマッチを貯めさせる
                     SpecialMatcher.ReizeZerolengthMatch(atom.Begin);
 
-                    // 文字ビルダーに文字マッチを貯めさせる
-                    foreach (var charMatcher in chars)
-                    {
-                        if(charMatcher.HasParent)
-                        {
-                            charMatcher.IsMatch(c);
-                        }
-                    }
-                    // 否定文字ビルダーに否定文字マッチを貯めさせる
-                    foreach (var denyMatcher in denys)
-                    {
-                        if(denyMatcher.HasParent)
-                        {
-                            denyMatcher.IsMatch(c);
-                        }
-                    }
+                    // 肯定文字・否定文字ビルダーに文字マッチを貯めさせる
+                    chars.ForEach(m => m.IsMatch(c));
                 }
+
+                // 境界アトムの時
+                else if(atom is BorderAtom borderAtom)
+                {
+                    borders.ForEach(m => m.IsMatch(borderAtom));
+                }
+
                 // 開始・終了・インデント・デデント・改行の時
                 else if (atom is DelimiterAtom)
                 {
@@ -71,9 +67,24 @@ namespace LIME
                 // 生成直後でまだ上位に上げてないマッチ全てを上に上げる
                 while (Match.NewItems.Count > 0)
                 {
+
                     // 動かす優先順位の高いマッチを取得する
                     foreach (var newMatch in Match.NewItems)
                     {
+
+                        //if(newMatch.UniqID == "T29")
+                        //{
+                        //    var temp = "";
+                        //}
+
+                        //// ツリー構造を取得する
+                        //client.Clear();
+                        //client.WriteLine($"{atom.Begin}");
+                        //root.Debug_OutputTreeDetail(client);
+                        ////client.WriteLine(tree);
+                        //client.Wait();
+
+
                         Match targetMatch = newMatch;
                         // マッチが居るマッチャーを取得する
                         var matcher = Match.Map[targetMatch];
@@ -92,7 +103,7 @@ namespace LIME
                                 // CombinedMatch に取り込まれたので参照カウントを減らす
                                 foreach (var sameItem in same)
                                 {
-                                    sameItem.InstanceCounterRemove();
+                                    sameItem.InstanceCounterRemove(atom);
 
                                     // このマッチは不要なので Map から参照を消す
                                     Match.Map.Remove(sameItem);
@@ -112,11 +123,21 @@ namespace LIME
                             }
                         }
 
+                        //if(targetMatch.UniqID == "T15")
+                        //{
+                        //    var temp = "";
+                        //}
+
+                        if(targetMatch.Length == 0)
+                        {
+                            var temp = "";
+                        }
+
                         // このマッチは不要なので Map から参照を消す
                         Match.Map.Remove(targetMatch);
 
                         // このマッチが取り込まれたか否かに関わらず、参照カウントを減らす。
-                        targetMatch.InstanceCounterRemove();
+                        targetMatch.InstanceCounterRemove(atom);
                     }
                 }
             }
@@ -147,6 +168,10 @@ namespace LIME
 
             // ブランク系トークンをバラして行開始トークンを差し込む
             atoms = DivideBlank(atoms).ToArray();
+
+            // 文字同士の間に境界アトムを挿入する
+            atoms = InsertBorder(atoms).ToArray();
+
             //// ダミー文字を消去する
             //atoms = RemoveDummy(atoms);
 
@@ -409,6 +434,31 @@ namespace LIME
             }
 
             yield return new EndAtom(end);
+        }
+        #endregion
+
+        #region 文字と文字の間に境界アトムを挿入する
+        private static IEnumerable<TextAtom> InsertBorder(IEnumerable<TextAtom> atoms)
+        {
+            TextAtom prev = null;
+
+            foreach (var atom in atoms)
+            {
+                if ((atom.Begin == 0) && (atom is CharAtom))
+                {
+                    yield return new BorderAtom(prev, atom);
+                }
+                else if(atom is EndAtom)
+                {
+                    yield return new BorderAtom(prev, atom);
+                }
+                else if((prev is CharAtom cPrev) && (atom is CharAtom cNext))
+                {
+                    yield return new BorderAtom(prev, atom);
+                }
+                yield return atom;
+                prev = atom;
+            }
         }
         #endregion
 

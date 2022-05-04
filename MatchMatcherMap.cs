@@ -113,6 +113,11 @@ namespace LIME
         /// <param name="child"></param>
         public void Remove(Match child)
         {
+            //if(child.UniqID == "T28")
+            //{
+            //    var temp = "";
+            //}
+
             if (RemovedList.Contains(child.UniqID))
             {
                 throw new ArgumentException();
@@ -199,7 +204,20 @@ namespace LIME
 
                 foreach (var match in hash)
                 {
-                    Debug.WriteLine($"  {match.UniqID} {match.TypeName} [{match.Begin}-{match.End}]");
+                    DumpMatch(match,"  ");
+                }
+            }
+        }
+
+        private void DumpMatch(Match match, string indent)
+        {
+            Debug.WriteLine($"{indent}{match.UniqID} {match.TypeName} [{match.Begin}-{match.End}]");
+
+            if (match is OwnerMatch owner)
+            {
+                foreach (var subMatch in owner.Inners())
+                {
+                    DumpMatch(subMatch, $"{indent}  ");
                 }
             }
         }

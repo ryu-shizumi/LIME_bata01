@@ -13,7 +13,7 @@ namespace LIME
         public int Begin { get; protected set; }
         public int End { get; protected set; }
 
-        public int Length
+        public virtual int Length
         {
             get { return End - Begin; }
         }
@@ -69,7 +69,7 @@ namespace LIME
         {
             if(_dict.ContainsKey(key))
             {
-                // Match.Map.Dump();
+                //Match.Map.Dump();
 
                 var hashSet = _dict[key];
                 var list = new List<TValue>(hashSet);
@@ -83,6 +83,11 @@ namespace LIME
                 {
                     Match item = list[i];
 
+                    if(item.UniqID == "T9")
+                    {
+                        var temp = "";
+                    }
+
                     //Debug.WriteLine($"{item.UniqID} {item.TypeName} Map.Remove");
                     // このマッチは不要なので Map から参照を消す
                     Match.Map.Remove(item);
@@ -95,6 +100,35 @@ namespace LIME
             foreach(var key in _dict.Keys)
             {
                 _dict[key].Clear();
+            }
+        }
+
+        public void Dump()
+        {
+            var keys = _dict.Keys;
+
+            if(keys.Count == 0)
+            {
+                Debug.WriteLine("(要素なし)");
+                return;
+            }
+
+            foreach(var key in keys)
+            {
+                var sb = new StringBuilder();
+
+                foreach(var match in _dict[key])
+                {
+                    if(sb.Length != 0)
+                    {
+                        sb.Append(",");
+                    }
+                    sb.Append($"{match.UniqID}[{match.Begin}-{match.End}]");
+                }
+
+                string inners = sb.ToString();
+
+                Debug.WriteLine($"_dict[{key}]=( {inners} )");
             }
         }
     }
@@ -115,10 +149,17 @@ namespace LIME
             //Debug.WriteLine($"Add\t{match.UniqID}\t{match.TypeName}\t{begin}\t{_dict[begin]}\t++");
             _dict[begin]++;
         }
+
+        /// <summary>
+        /// マッチ１個分だけ、開始位置の参照カウントを減らす
+        /// </summary>
+        /// <param name="match">削除対象マッチ</param>
+        /// <returns>削除対象マッチと開始位置が同じマッチの残数/returns>
         public int Remove(Match match)
         {
             var begin = match.Begin;
             //Debug.WriteLine($"Remove\t{match.UniqID}\t{match.TypeName}\t{begin}\t{_dict[begin]}\t--");
+
             if (_dict.ContainsKey(begin) == false)
             {
                 throw new IndexOutOfRangeException();
@@ -144,6 +185,15 @@ namespace LIME
         public void Clear()
         {
             _dict.Clear();
+        }
+
+        public void Dump()
+        {
+            foreach(var key in _dict.Keys)
+            {
+                Debug.WriteLine($"_dict[{key}]={_dict[key]}");
+            }
+
         }
     }
     #endregion
@@ -208,7 +258,7 @@ namespace LIME
             //     インスタンスカウンターでカウントする
             //     新規インスタンスに追加する
 
-            if(this is RootMatch)
+            if((this is RootMatch) ||(this is LoopBodysMatch))
             {
                 // インスタンスカウンターでカウントしない
                 // 新規インスタンスに追加しない
@@ -233,6 +283,8 @@ namespace LIME
             Map[this] = generator;
 
             Tag = generator.Tag;
+
+            //Debug.WriteLine($"☆ [{Begin}-{End}] \"{Value}\" {UniqID} {Generator.UniqID}");
         }
         #endregion
 
@@ -245,24 +297,35 @@ namespace LIME
         }
 
         /// <summary>
-        /// このインスタンスの参照カウンタをデクリメントする
+        /// このインスタンスの「開始インデックスリスト」の参照カウンタをデクリメントする
         /// </summary>
-        public void InstanceCounterRemove()
+        public void InstanceCounterRemove(TextAtom atom)
         {
             var begin = Begin;
+
+            //if(Length == 0)
+            //{
+            //    Debug.WriteLine($"LengthZero Remove {UniqID} [{Begin}-{End}]");
+            //}
 
             if (!(this is LeftMatch) && !(this is LoopMatch))
             {
                 var count = _beginInstanceCounter.Remove(this);
+                //Debug.WriteLine($"✕ [{Begin}-{End}] \"{Value}\" {UniqID} {Generator.UniqID}");
+                //Debug.WriteLine($"BeginCounter[{Begin}] Remove {count + 1}→{count} {UniqID}");
 
-                // もし参照カウントを減らした結果、
-                // 同じインデックスで始まるマッチがゼロ個になった時
-                if (count == 0)
+                if(atom is CharAtom)
                 {
-                    ////Debug.WriteLine($"LoopMatch.RemoveSameKeyAll({begin})");
-                    LoopMatch.EndInstances.RemoveSameKeyAll(begin);
-                    ////Debug.WriteLine($"LeftMatch.RemoveSameKeyAll({begin})");
-                    LeftMatch.EndInstances.RemoveSameKeyAll(begin);
+                    // もし参照カウントを減らした結果、
+                    // 同じインデックスで始まるマッチがゼロ個になった時
+                    if (count == 0)
+                    {
+                        ////Debug.WriteLine($"LoopMatch.RemoveSameKeyAll({begin})");
+                        LoopMatch.EndInstances.RemoveSameKeyAll(begin);
+                        ////Debug.WriteLine($"LeftMatch.RemoveSameKeyAll({begin})");
+                        LeftMatch.EndInstances.RemoveSameKeyAll(begin);
+                    }
+
                 }
             }
         }
@@ -379,20 +442,53 @@ namespace LIME
         #endregion
 
         #region デバッグ用処理
-        public void DebugWrite()
-        {
-            DebugWrite_Body("");
-            Debug.WriteLine(" _ _ _ _ _ _ _ _ _ _ _ _ _ _ _");
-        }
-        private void DebugWrite_Body(string indent)
-        {
-            Debug.WriteLine($"{indent}{Value} {SpecialID}");
+        //public void DebugWrite(string label = "")
+        //{
+        //    if(label != "")
+        //    {
+        //        Debug.WriteLine(label);
+        //    }
+            
+        //    if(this is DummyMatch)
+        //    {
+        //        Debug.WriteLine("(該当無し)");
+        //    }
+        //    else
+        //    {
+        //        DebugWrite_Body("");
+        //    }
 
-            if(this is OwnerMatch owner)
+        //    Debug.WriteLine(" _ _ _ _ _ _ _ _ _ _ _ _ _ _ _");
+        //}
+        //private void DebugWrite_Body(string indent)
+        //{
+        //    Debug.WriteLine($"{indent}{Value} {UniqID} {SpecialID}");
+
+        //    if(this is OwnerMatch owner)
+        //    {
+        //        foreach(var inner in owner.Inners())
+        //        {
+        //            inner.DebugWrite_Body($"{indent}  ");
+        //        }
+        //    }
+        //}
+        public void Dump()
+        {
+            DumpBody(this, "");
+            void DumpBody(Match target, string indent)
             {
-                foreach(var inner in owner.Inners())
+                var c = "";
+                if(target is CharMatch cm)
                 {
-                    inner.DebugWrite_Body($"{indent}  ");
+                    c = cm.Value;
+                }
+                Debug.WriteLine($"{indent}{target.UniqID} {target.TypeName}{c}");
+                if(target is OwnerMatch owner)
+                {
+                    foreach(var inner in owner.Inners())
+                    {
+                        DumpBody(inner, indent + "  ");
+                    }
                 }
             }
         }
@@ -413,19 +509,77 @@ namespace LIME
     }
     #endregion
 
+    public static class MatchEx
+    {
+        public static void DebugWrite(this Match match, string label = "")
+        {
+            if (label != "")
+            {
+                Debug.WriteLine(label);
+            }
+
+            if (match == null)
+            {
+                Debug.WriteLine("(該当無し)");
+            }
+            else
+            {
+                DebugWrite_Body(match, "");
+            }
+
+            Debug.WriteLine(" _ _ _ _ _ _ _ _ _ _ _ _ _ _ _");
+        }
+
+        #region デバッグ用処理
+        
+        private static void DebugWrite_Body(Match match, string indent)
+        {
+            Debug.WriteLine($"{indent}{match.Value} {match.UniqID} {match.SpecialID}");
+
+            if (match is OwnerMatch owner)
+            {
+                foreach (var inner in owner.Inners())
+                {
+                    DebugWrite_Body(inner, $"{indent}  ");
+                }
+            }
+        }
+        #endregion
+    }
+
+    #region DummyMatch
+    public class DummyMatch : Match
+    {
+        public DummyMatch()
+            : base(0,0,null)
+        {
+
+        }
+    }
+    #endregion
+
     #region 文字マッチ
     public class CharMatch : Match
     {
         public CharMatch(TextRange beginEnd, Matcher generator) : base(beginEnd, generator) { }
     }
+
+    public class CharBeginMatch : Match
+    {
+        public CharBeginMatch(TextRange beginEnd, Matcher generator) : base(beginEnd.Begin, beginEnd.Begin, generator) { }
+    }
+    public class CharEndMatch : Match
+    {
+        public CharEndMatch(TextRange beginEnd, Matcher generator) : base(beginEnd.End, beginEnd.End, generator) { }
+    }
     #endregion
 
     #region 否定文字マッチ
 
-    public class DenyMatch : Match
-    {
-        public DenyMatch(TextRange beginEnd, Matcher generator) : base(beginEnd,generator) { }
-    }
+    //public class DenyMatch : Match
+    //{
+    //    public DenyMatch(TextRange beginEnd, Matcher generator) : base(beginEnd,generator) { }
+    //}
     #endregion
 
     #region 境界マッチ
@@ -441,8 +595,6 @@ namespace LIME
         public CharsMatch(TextRange beginEnd, Matcher generator) : base(beginEnd, generator) { }
     }
     #endregion
-
-    
 
     #region 子持ちマッチの基底クラス
     public abstract class OwnerMatch : Match
@@ -503,15 +655,15 @@ namespace LIME
 
 
 
-        public Match Left;
+        public Match Inner { get; private set; }
         public LeftMatch(Match left, Matcher generator) : base(left, generator)
         {
-            Left = left;
+            Inner = left;
             EndInstances.Add(End, this);
         }
         public override IEnumerable<Match> Inners()
         {
-            yield return Left;
+            yield return Inner;
         }
         /// <summary>
         /// 消去候補インスタンスリストからこのインスタンスを削除する
@@ -550,7 +702,7 @@ namespace LIME
     #region ループ本体部(個別)マッチ
     public class LoopBodyMatch : OwnerMatch
     {
-        public Match Body { get; private set; }
+        public Match Inner { get; private set; }
 
         public LoopBodyMatch(Match body, Matcher generator) : base(body, generator)
         {
@@ -559,12 +711,12 @@ namespace LIME
                 throw new ArgumentException();
             }
 
-            Body = body;
+            Inner = body;
         }
 
         public override IEnumerable<Match> Inners()
         {
-            yield return Body;
+            yield return Inner;
         }
     }
     #endregion
@@ -623,6 +775,8 @@ namespace LIME
         public Match Head { get; private set; }
         public LoopBodysMatch Bodys { get; private set; }
 
+        public bool Finished { get; private set; } = false;
+
         public LoopMatch(Match head, Matcher generator)
             : base(new TextRange(head.Begin, head.End), generator)
         {
@@ -665,6 +819,12 @@ namespace LIME
             if(Bodys == null)
             {
                 bodys = new LoopBodysMatch(body, Generator);
+
+                if(bodys.UniqID == "T29")
+                {
+                    var temp = "";
+                }
+
             }
             else
             {
@@ -682,6 +842,7 @@ namespace LIME
         public LoopFinishedMatch SetTail(Match tail)
         {
             var result = new LoopFinishedMatch(Head, Bodys, tail, Generator);
+            Finished = true;
             return result;
         }
 

@@ -10,12 +10,23 @@ namespace LIME
 
     public abstract class TextAtom : TextRange
     {
+        public static int _uniqCount = 0;
+
+        public string UniqID { get; private set; }
+
+
         public TextAtom(TextRange beginEnd)
             : base(beginEnd)
-        { }
+        {
+            UniqID = $"A{_uniqCount}";
+            _uniqCount++;
+        }
         public TextAtom(int begin, int end)
             : base(begin, end)
-        { }
+        {
+            UniqID = $"A{_uniqCount}";
+            _uniqCount++;
+        }
 
         public string TypeName
         {
@@ -230,6 +241,19 @@ namespace LIME
     public class EndAtom : DelimiterAtom
     {
         public EndAtom(int begin) : base(begin) { }
+    }
+
+    /// <summary>境界アトム(長さゼロ)</summary>
+    public class BorderAtom : DelimiterAtom
+    {
+        public BorderAtom(TextAtom prev, TextAtom next) : base(next.Begin)
+        {
+            Prev = prev;
+            Next = next;
+        }
+
+        public TextAtom Prev { get; }
+        public TextAtom Next { get; }
     }
     #endregion
 
